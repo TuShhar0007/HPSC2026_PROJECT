@@ -1,0 +1,75 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  ME 522 – Parallel Image Processing Pipeline
+#  Makefile  |  IIT Mandi
+# ═══════════════════════════════════════════════════════════════════════════
+
+CC      := gcc
+CFLAGS  := -Wall -Wextra -std=c11 -fopenmp -O2 -march=native
+LDFLAGS := -lm -fopenmp
+SRCDIR  := src
+OBJDIR  := build
+BINDIR  := .
+
+TARGET  := $(BINDIR)/pipeline
+
+SRCS    := $(wildcard $(SRCDIR)/*.c)
+OBJS    := $(patsubst $(SRCDIR)/%.c, $(OBJDIR)/%.o, $(SRCS))
+
+# ── Default ──────────────────────────────────────────────────────────────
+
+.PHONY: all clean bench plot test generate_images
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	@mkdir -p $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@echo "  LD  $@"
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ $<
+	@echo "  CC  $@"
+
+# ── Clean ─────────────────────────────────────────────────────────────────
+
+clean:
+	rm -rf $(OBJDIR) $(TARGET) results/*.csv output/
+
+# ── Generate synthetic test images ───────────────────────────────────────
+# Creates a `data/` directory with N synthetic PPM images (default N=20).
+
+generate_images:
+	@mkdir -p data
+	python3 scripts/generate_test_images.py --out data --count 20 --width 512 --height 512
+	@echo "Test images created in data/"
+
+# ── Test: run pipeline on data/ with 4 threads ───────────────────────────
+
+test: all generate_images
+	OMP_NUM_THREADS=4 ./pipeline -i data -o output -t 4 -c results/test_timings.csv
+	@echo "Test run complete. Check output/ and results/"
+
+# ── Benchmark: strong scaling (1,2,4,8 threads) ──────────────────────────
+# Runs the pipeline in bench mode (no output writes) and collects CSVs.
+
+bench: all generate_images
+	@mkdir -p results
+	@for T in 1 2 4 8; do \
+	    echo ">> Running with $$T threads..."; \
+	    OMP_NUM_THREADS=$$T ./pipeline -i data -o output -t $$T -b \
+	        -c results/timing_t$${T}.csv; \
+	done
+	@echo "Benchmark complete. CSVs in results/"
+
+# ── Plot: generate scaling figures from benchmark CSVs ───────────────────
+
+plot:
+	python3 python/plot_scaling.py --results results/ --out results/plots/
+	@echo "Plots written to results/plots/"
+
+# ── HPC submission (uses scripts/slurm/) ─────────────────────────────────
+
+hpc_submit:
+	sbatch scripts/slurm/strong_scaling.sh
+	sbatch scripts/slurm/weak_scaling.sh
